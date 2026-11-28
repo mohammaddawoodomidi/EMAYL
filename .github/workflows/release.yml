@@ -1,0 +1,202 @@
+# Publishes downloadable programs when a version tag such as v0.1.0 is pushed.
+#
+#   1. CI runs first (build + tests on Linux and Windows, dependency rules).
+#   2. A DRAFT release is created (nobody can see a draft).
+#   3. Linux and Windows programs are built from the tagged source, zipped, and
+#      uploaded with a SHA-256 checksum file each.
+#   4. Only when both uploads worked is the draft published.
+#
+# The release builds do not use any cache, so what is published comes only from
+# the tagged source and the pinned compiler.
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+env:
+  RUST_VERSION: "1.97.0"
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  ci:
+    name: Tests
+    uses: ./.github/workflows/ci.yml
+
+  draft:
+    name: Create draft release
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: The tag must match the program's version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n 1)"
+          echo "tag: $TAG, Cargo.toml version: $version"
+          test "$TAG" = "v$version"
+
+      - name: Create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          cat > notes.md <<'NOTES'
+          ## Downloads
+
+          - **Windows:** `emayl-for-windows-x86_64.exe` (installer, recommended) or
+            `emayl-windows-x86_64.zip` (no installation: unzip and run)
+          - **Ubuntu / Debian / Mint:** `emayl_<version>_amd64.deb` (double-click it, or
+            `sudo apt install ./emayl_<version>_amd64.deb`)
+          - **Other Linux:** `emayl-linux-x86_64.tar.gz` (unpack and run `./emayl`)
+
+          Each file has a matching `.sha256` file. Compare it with the checksum of what you
+          downloaded (Windows: `Get-FileHash <file>`, Linux: `sha256sum <file>`).
+          This detects a damaged or incomplete download. It does not prove who made the
+          file, because both come from the same place.
+
+          ## Please note
+
+          - The Windows program is **not signed**, so Windows SmartScreen may warn you the first time.
+          - The Linux files are built on Ubuntu 24.04 and need Ubuntu 24.04 or newer (or another
+            Linux with an equally recent C library) and a normal desktop's window libraries. If it
+            closes at once without a window, run:
+            `sudo apt install libxkbcommon-x11-0 libxkbcommon0 libx11-6 libxcursor1 libxi6 libxrandr2 libwayland-client0 libegl1`
+          NOTES
+          # A release for this tag may already exist (it is created automatically when a
+          # release is published from GitHub's web page). Then the files are added to it.
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "A release for $TAG already exists; the programs will be added to it."
+          else
+            gh release create "$TAG" --repo "$REPO" --draft --title "$TAG" --notes-file notes.md
+          fi
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: draft
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: Linux
+            # Not "latest": the Linux program only runs on systems at least as new as the
+            # one it was built on, so it is built on an older, fixed release (Ubuntu 24.04).
+            os: ubuntu-24.04
+            file: emayl-linux-x86_64.tar.gz
+          - name: Windows
+            os: windows-latest
+            file: emayl-windows-x86_64.zip
+    env:
+      # Website sign-in (Google/Microsoft) is switched on only when these are set in the
+      # repository settings (Settings > Secrets and variables > Actions). See MAINTAINING.md, section F.
+      # They identify the program to the provider; they are not a person's password.
+      EMAYL_GOOGLE_CLIENT_ID: ${{ vars.EMAYL_GOOGLE_CLIENT_ID }}
+      EMAYL_GOOGLE_CLIENT_SECRET: ${{ secrets.EMAYL_GOOGLE_CLIENT_SECRET }}
+      EMAYL_MICROSOFT_CLIENT_ID: ${{ vars.EMAYL_MICROSOFT_CLIENT_ID }}
+      EMAYL_MICROSOFT_TENANT: ${{ vars.EMAYL_MICROSOFT_TENANT }}
+      FILE: ${{ matrix.file }}
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        shell: bash
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update
+          rustup default "$RUST_VERSION"
+          rustc --version
+
+      - name: Build
+        run: cargo build --release --locked -p mailgui
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir dist
+          cp target/release/emayl LICENSE README.md dist/
+          tar -C dist -czf "$FILE" emayl LICENSE README.md
+          sha256sum "$FILE" > "$FILE.sha256"
+          cat "$FILE.sha256"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item target/release/emayl.exe, LICENSE, README.md dist/
+          Compress-Archive -Path dist/* -DestinationPath $env:FILE
+          $hash = (Get-FileHash -Algorithm SHA256 $env:FILE).Hash.ToLower()
+          "$hash  $env:FILE" | Out-File -Encoding ascii "$($env:FILE).sha256"
+          Get-Content "$($env:FILE).sha256"
+
+      - name: Debian package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          version="${TAG#v}"
+          bash packaging/linux/build-deb.sh target/release/emayl "$version" deb
+          cd deb
+          sha256sum "emayl_${version}_amd64.deb" > "emayl_${version}_amd64.deb.sha256"
+          cat "emayl_${version}_amd64.deb.sha256"
+          dpkg-deb --info "emayl_${version}_amd64.deb"
+
+      - name: Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nsis --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw "could not install NSIS (exit $LASTEXITCODE)" }
+          $candidates = @("$env:ProgramFiles\NSIS\makensis.exe", "${env:ProgramFiles(x86)}\NSIS\makensis.exe")
+          $makensis = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $makensis) { throw "makensis.exe was not found after installing NSIS" }
+          $version = $env:TAG.TrimStart('v')
+          $setup = "emayl-for-windows-x86_64.exe"
+          & $makensis -V2 "-DVERSION=$version" "-DSOURCE_EXE=$PWD\target\release\emayl.exe" "-DOUTFILE=$PWD\$setup" packaging\windows\installer.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed (exit $LASTEXITCODE)" }
+          $hash = (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLower()
+          "$hash  $setup" | Out-File -Encoding ascii "$setup.sha256"
+          Get-Content "$setup.sha256"
+
+      - name: Upload to the draft release
+        shell: bash
+        run: |
+          gh release upload "$TAG" "$FILE" "$FILE.sha256" --repo "$REPO" --clobber
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            gh release upload "$TAG" deb/emayl_*_amd64.deb deb/emayl_*_amd64.deb.sha256 --repo "$REPO" --clobber
+          else
+            gh release upload "$TAG" emayl-for-windows-x86_64.exe emayl-for-windows-x86_64.exe.sha256 --repo "$REPO" --clobber
+          fi
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: gh release edit "$TAG" --repo "$REPO" --draft=false
