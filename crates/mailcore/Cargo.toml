@@ -1,0 +1,57 @@
+[package]
+name = "mailcore"
+description = "Headless core of the mail client: accounts, provider discovery, secrets."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-imap = { version = "0.12.0", default-features = false, features = ["runtime-tokio"] }
+base64 = "0.23.1"
+directories = "6"
+futures-util = "0.3.34"
+getrandom = "0.4.3"
+idna = "1.1.0"
+mail-builder = { version = "2.0.1", default-features = false }
+mailparse = "0.19.0"
+ammonia = "=4.2.5"
+# Local mail database. Bundled SQLite (C code; compiled from source, 3.54.1 in this version).
+rusqlite = { version = "=0.43.0", features = ["bundled"] }
+# Same version ammonia uses; we use only its tokenizer to read the already-cleaned HTML.
+html5ever = "=0.40.1"
+# "rustls-no-provider": the plain "rustls" feature would pull in aws-lc (C code, a second
+# crypto provider). We hand reqwest our own ring + OS-verifier config instead.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+roxmltree = "0.21.2"
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "0.7.1"
+secrecy = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+socket2 = { version = "0.6.5", features = ["all"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "net", "time", "io-util", "sync", "macros"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }
+toml = "1"
+tracing = "0.1"
+url = "2.5.8"
+uuid = { version = "1.26.1", features = ["v4"] }
+zeroize = "1"
+
+# Windows: Windows Credential Manager. Linux: Secret Service over D-Bus.
+# There is deliberately NO plaintext fallback store.
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "4", default-features = false, features = ["v1", "windows-native-keyring-store"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "4", default-features = false, features = ["v1", "zbus-secret-service-keyring-store"] }
+
+[dev-dependencies]
+rcgen = "0.14.10"
+tokio = { version = "1", features = ["rt", "macros"] }

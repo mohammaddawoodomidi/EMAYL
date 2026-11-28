@@ -1,0 +1,51 @@
+[package]
+name = "mailgui"
+description = "EMAYL: the graphical mail client."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "emayl"
+path = "src/main.rs"
+
+[lib]
+name = "mailgui"
+path = "src/lib.rs"
+
+[target.'cfg(windows)'.build-dependencies]
+# Puts the program's icon, name and version into the Windows .exe (see build.rs).
+embed-resource = "3"
+
+[dependencies]
+mailcore = { path = "../mailcore" }
+# tiny-skia draws with the processor and works everywhere; see the end of this list for the
+# graphics-card drawing.
+iced = { version = "=0.14.0", default-features = false, features = ["tiny-skia", "crisp", "web-colors", "thread-pool", "tokio", "image-without-codecs", "lazy", "svg"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+directories = "6"
+# Opens a link in the default browser (xdg-open / ShellExecute); only called after our own link checks.
+open = "5"
+rfd = "0.18"
+secrecy = "0.10"
+zeroize = "1"
+tracing = "0.1"
+
+# The graphics-card drawing (wgpu) is left out of the Windows program on purpose: laptops with two
+# graphics chips (Intel plus NVIDIA) made the window flash white and black. Windows draws with the
+# processor only. Everywhere else it is included, with the Linux window-system libraries.
+[target.'cfg(not(windows))'.dependencies]
+iced = { version = "=0.14.0", default-features = false, features = ["wgpu", "x11", "wayland", "linux-theme-detection"] }
+
+# Linux only: tells the dock how many unread messages there are (see src/badge.rs).
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
+[dev-dependencies]
+iced_test = "=0.14.0"
