@@ -1,0 +1,179 @@
+# Runs on every change, every week, and before every release (release.yml calls it).
+# Builds and tests on the two systems we ship for: Linux and Windows (native runners,
+# no cross-compiling), and checks the dependency rules in deny.toml.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    # Mondays: new security notices appear even when our code did not change.
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Only an older run of the same pull request is cancelled when a newer one starts.
+  # Runs for pushes and releases always finish (a cancelled run shows as a confusing
+  # "operation was canceled" and tells nothing about the code).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The one place that says which compiler is used (release.yml uses the same value).
+  RUST_VERSION: "1.97.0"
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_DENY_VERSION: "0.22.0"
+
+jobs:
+  test:
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        shell: bash
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal -c clippy -c rustfmt --no-self-update
+          rustup default "$RUST_VERSION"
+          rustc --version
+          cargo --version
+
+      - name: Cache downloaded crates and build output
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ env.RUST_VERSION }}-
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Lints (warnings fail the build)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # Only runs when something above failed. A "cannot update the lock file" error means the
+      # files on GitHub disagree with each other; this prints what Cargo would change, plus
+      # fingerprints of the manifest files, so the difference can be found without guessing.
+      - name: If a step failed, show what is wrong with the lock file
+        if: failure()
+        shell: bash
+        run: |
+          cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.before"
+          cargo metadata --format-version 1 > /dev/null 2> "$RUNNER_TEMP/meta.txt" || true
+          echo "=== what Cargo says"; head -20 "$RUNNER_TEMP/meta.txt"
+          echo "=== what Cargo would change in Cargo.lock ('<' = your file, '>' = what Cargo wants)"
+          diff "$RUNNER_TEMP/Cargo.lock.before" Cargo.lock | head -80 || true
+          echo "=== fingerprints (lines, bytes, sha256)"
+          wc -lc Cargo.toml Cargo.lock crates/*/Cargo.toml vendor/iced_tiny_skia/Cargo.toml || true
+          sha256sum Cargo.toml "$RUNNER_TEMP/Cargo.lock.before" crates/*/Cargo.toml vendor/iced_tiny_skia/Cargo.toml || true
+
+      - name: Tests
+        # --no-fail-fast: run every test group even if one fails, so a single run shows all problems.
+        run: cargo test --workspace --locked --no-fail-fast
+
+      - name: Release build
+        run: cargo build --release --locked -p mailgui
+
+      - name: Start the program on a virtual screen (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb
+          # The program loads these when it starts (they are not linked at build time).
+          # Without libxkbcommon-x11 it stops at once. The rest are normally present on a
+          # desktop; each is added separately so one missing name cannot fail this step.
+          sudo apt-get install -y --no-install-recommends libxkbcommon-x11-0
+          for pkg in libxkbcommon0 libx11-6 libx11-xcb1 libxcursor1 libxi6 libxrandr2 \
+                     libwayland-client0 libwayland-egl1 libegl1; do
+            sudo apt-get install -y --no-install-recommends "$pkg" || echo "could not install $pkg"
+          done
+          home="$(mktemp -d)"
+          # The program has no end of its own: after 8 seconds `timeout` stops it
+          # (exit 124 = it was still running, so it did not crash on start).
+          set +e
+          HOME="$home" XDG_DATA_HOME="$home/d" XDG_CONFIG_HOME="$home/c" ICED_BACKEND=tiny-skia \
+            timeout 8 xvfb-run -a -s "-screen 0 1280x800x24" target/release/emayl
+          code=$?
+          set -e
+          echo "exit code: $code"
+          test "$code" -eq 124
+
+      - name: Installers can still be built (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          # Uses a stand-in program file: this only checks the packaging scripts, so a
+          # mistake in them is found now and not on release day.
+          sudo apt-get install -y --no-install-recommends nsis lintian desktop-file-utils
+          cp /bin/true "$RUNNER_TEMP/emayl"
+          bash packaging/linux/build-deb.sh "$RUNNER_TEMP/emayl" 0.0.1 "$RUNNER_TEMP/deb"
+          dpkg-deb --info "$RUNNER_TEMP"/deb/emayl_0.0.1_amd64.deb
+          dpkg-deb --contents "$RUNNER_TEMP"/deb/emayl_0.0.1_amd64.deb
+          desktop-file-validate packaging/linux/emayl.desktop
+          makensis -V2 -DVERSION=0.0.1 "-DSOURCE_EXE=$RUNNER_TEMP/emayl" "-DOUTFILE=$RUNNER_TEMP/emayl-for-windows-x86_64.exe" packaging/windows/installer.nsi
+          test -s "$RUNNER_TEMP/emayl-for-windows-x86_64.exe"
+
+  supply-chain:
+    name: Dependency rules (cargo-deny)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update
+          rustup default "$RUST_VERSION"
+
+      - name: Cache cargo-deny
+        id: deny-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-${{ env.CARGO_DENY_VERSION }}-${{ env.RUST_VERSION }}
+
+      - name: Install cargo-deny
+        if: steps.deny-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked
+
+      # Fails on: known security problems, banned crates (OpenSSL, aws-lc, GTK, ...),
+      # licenses we did not allow, and crates from places other than crates.io.
+      - name: Check dependencies
+        run: cargo deny --locked check
+
+      # Only runs when something above failed. A "cannot update the lock file" error means the
+      # files on GitHub disagree with each other; this prints what Cargo would change, plus
+      # fingerprints of the manifest files, so the difference can be found without guessing.
+      - name: If a step failed, show what is wrong with the lock file
+        if: failure()
+        shell: bash
+        run: |
+          cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.before"
+          cargo metadata --format-version 1 > /dev/null 2> "$RUNNER_TEMP/meta.txt" || true
+          echo "=== what Cargo says"; head -20 "$RUNNER_TEMP/meta.txt"
+          echo "=== what Cargo would change in Cargo.lock ('<' = your file, '>' = what Cargo wants)"
+          diff "$RUNNER_TEMP/Cargo.lock.before" Cargo.lock | head -80 || true
+          echo "=== fingerprints (lines, bytes, sha256)"
+          wc -lc Cargo.toml Cargo.lock crates/*/Cargo.toml vendor/iced_tiny_skia/Cargo.toml || true
+          sha256sum Cargo.toml "$RUNNER_TEMP/Cargo.lock.before" crates/*/Cargo.toml vendor/iced_tiny_skia/Cargo.toml || true
