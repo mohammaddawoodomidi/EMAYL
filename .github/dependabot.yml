@@ -1,0 +1,20 @@
+# Dependabot only proposes updates for the build workflows (GitHub Actions).
+#
+# It does NOT propose updates for the Rust libraries. Reason: the library list (Cargo.toml) and
+# its exact-version record (Cargo.lock) must always agree, and the build refuses to run when they
+# do not. When a pull request edited one of them while a new batch of code overwrote the other,
+# every check failed with "cannot update the lock file". Library updates are therefore done
+# together with each new batch of code, with all tests run, so only one party writes those files.
+# Security problems in libraries are still caught every week by the "cargo deny" job (deny.toml).
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    # 0 = no pull requests for Rust libraries (see the note at the top).
+    open-pull-requests-limit: 0
