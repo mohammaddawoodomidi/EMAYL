@@ -1,0 +1,15 @@
+# Build-time settings applied to everyone who builds this project (including CI).
+#
+# Local mail database (SQLite, compiled from source by `libsqlite3-sys`):
+#   * RTREE is not used by this program; it was the source of a 2026 SQLite bug
+#     (use-after-free on crafted databases), so it is left out.
+#   * Extension loading is removed entirely.
+#   * DQS=0 makes "double quoted" text an error instead of silently becoming a
+#     string literal, which catches typos and some injection mistakes.
+# `store::tests::sqlite_build_has_expected_features` checks these took effect.
+[env]
+LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_RTREE -USQLITE_ENABLE_LOAD_EXTENSION -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DQS=0"
+
+# The window tests draw with the software renderer, so they need no graphics card
+# (and therefore also run on the build servers).
+ICED_TEST_BACKEND = "tiny-skia"
