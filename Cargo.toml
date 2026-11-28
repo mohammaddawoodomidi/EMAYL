@@ -1,0 +1,36 @@
+[workspace]
+resolver = "3"
+members = ["crates/mailcore", "crates/mailcli", "crates/mailgui"]
+# vendor/ holds a patched copy of one dependency; it is not part of this program's own code.
+exclude = ["vendor"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+# MIT is a placeholder choice made for the owner; change it (and LICENSE) before publishing if another license is wanted.
+license = "MIT"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+dbg_macro = "warn"
+todo = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+overflow-checks = true
+
+# A copy of iced_tiny_skia 0.14.1 with one speed fix for scrolling; see vendor/iced_tiny_skia/EMAYL-PATCH.md.
+[patch.crates-io]
+iced_tiny_skia = { path = "vendor/iced_tiny_skia" }

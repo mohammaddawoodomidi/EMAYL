@@ -1,0 +1,28 @@
+.TH EMAYL 1 "" "EMAYL" "User Commands"
+.SH NAME
+emayl \- fast, private email client
+.SH SYNOPSIS
+.B emayl
+.SH DESCRIPTION
+EMAYL is a graphical email client for any number of accounts, using IMAP and SMTP.
+Start it from the applications menu or by typing its name.
+It takes no command-line options.
+.PP
+Remote content in messages is blocked by default. Passwords are kept in the desktop's
+password store (GNOME Keyring or KWallet).
+.SH FILES
+.TP
+.I ~/.local/share/emayl/
+The saved copy of your mail, the outbox and drafts.
+.TP
+.I ~/.config/emayl/
+The list of accounts.
+.TP
+.I ~/.local/share/emayl/problems.log
+Notes about errors, written only when something goes wrong.
+.SH ENVIRONMENT
+.TP
+.B ICED_BACKEND
+Set to
+.B tiny-skia
+to draw the window with the processor instead of the graphics card.

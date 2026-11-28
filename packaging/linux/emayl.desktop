@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=EMAYL
+GenericName=Email Client
+Comment=Fast, private email for all your accounts
+Exec=emayl
+Icon=emayl
+Terminal=false
+Categories=Network;Email;
+Keywords=email;mail;inbox;imap;smtp;
+StartupNotify=true
+StartupWMClass=emayl

@@ -1,0 +1,81 @@
+# Dependency rules, checked on every change by `cargo deny check` (see .github/workflows/ci.yml).
+
+[graph]
+# Check the programs for the two systems we ship, not every platform a library supports.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+
+[advisories]
+# Known security problems in dependencies fail the build. "Unmaintained" and "unsound"
+# notices are checked for every dependency (not only our direct ones), so each one that
+# we accept is written down below with the reason. Look at this list again when a
+# dependency is updated, and at the latest on 2027-02-19.
+unmaintained = "all"
+unsound = "all"
+yanked = "deny"
+ignore = [
+    # Date library used directly by us and by async-imap; no replacement is possible
+    # without a new async-imap release.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained notice; also used by async-imap" },
+    # The next ones are inside the GUI toolkit (iced 0.14, pinned exactly) or its
+    # D-Bus/font dependencies. They are "no longer maintained" notices, not known attacks.
+    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; build-time macro only, via the GUI toolkit" },
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils unmaintained; tiny helper, via async crates" },
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz unmaintained; text shaping in the GUI toolkit" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; font reading in the GUI toolkit" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained; D-Bus (keyring, file dialog)" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained; D-Bus (keyring, file dialog)" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained; D-Bus (keyring, file dialog)" },
+    # lru 0.16.4 (via iced's graphics code): a use-after-free is possible only if code
+    # panics in the middle of LruCache::pop(). Release builds use panic = "abort"
+    # (see Cargo.toml), so a panic ends the program instead of unwinding. Fixed in
+    # lru >= 0.18.2, which needs a new iced release.
+    { id = "RUSTSEC-2026-0253", reason = "needs a panic during pop(); release builds abort on panic" },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Our own crates refer to each other by path; that is not a risky wildcard.
+allow-wildcard-paths = true
+deny = [
+    # Decision: no OpenSSL and no C TLS library. TLS is rustls with the `ring` provider only.
+    { crate = "openssl", reason = "TLS is rustls only" },
+    { crate = "openssl-sys", reason = "TLS is rustls only" },
+    { crate = "native-tls", reason = "TLS is rustls only (it would pull in OpenSSL on Linux)" },
+    { crate = "aws-lc-rs", reason = "single crypto provider (ring); aws-lc needs a C/C++/CMake toolchain" },
+    { crate = "aws-lc-sys", reason = "single crypto provider (ring)" },
+    # Decision: no GTK. The file dialog uses the desktop portal over D-Bus instead.
+    { crate = "gtk", reason = "file dialogs use the xdg portal, not GTK" },
+    { crate = "gtk-sys", reason = "file dialogs use the xdg portal, not GTK" },
+    { crate = "gtk3", reason = "file dialogs use the xdg portal, not GTK" },
+    # Decision: no C D-Bus library; D-Bus is spoken by pure-Rust zbus.
+    { crate = "libdbus-sys", reason = "use zbus (pure Rust)" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[licenses]
+# Only these licenses may appear in dependencies. Anything else fails the check,
+# so a new dependency with unusual terms is looked at by a person first.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+    "0BSD",
+    "BSL-1.0",
+]
+confidence-threshold = 0.9
